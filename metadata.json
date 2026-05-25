@@ -1,0 +1,6 @@
+{
+  "name": "Smartsheet Workspace Generator",
+  "description": "A full-stack Smartsheet workspace management and programmatic bulk generator tool. View, search, and verify connected workspaces, bulk generate naming hierarchies, and copy/download executable Python security scripts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
