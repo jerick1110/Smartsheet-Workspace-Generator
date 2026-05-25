@@ -1,6 +1,6 @@
 # 🚀 Hosting your Smartsheet Workspace Directory on Netlify
 
-This application is built with a dual-mode communication engine. It works out-of-the-box as a **static single page application (SPA)** on services like **Netlify** without requiring any back-ends or server configuration!
+This application is built with a dual-mode communication engine. It works completely out-of-the-box as a **highly-secured application** on services like **Netlify** without requiring any custom servers or server configuration!
 
 ---
 
@@ -21,7 +21,7 @@ git push -u origin main
 ### 2. Connect to Netlify
 1. Log in to your [Netlify Console](https://app.netlify.com/).
 2. Click **Add new site** -> select **Import an existing project**.
-3. Choose **GitHub** and select your directory repository.
+3. Choose **GitHub** and select your repository.
 4. Netlify will auto-detect the configuration settings:
    - **Build command**: `npm run build`
    - **Publish directory**: `dist`
@@ -29,20 +29,24 @@ git push -u origin main
 
 ---
 
-## ⚡ How direct Smartsheet communication works on Netlify
+## ⚡ How Smartsheet proxying works on Netlify (No CORS errors!)
 
-When running locally or on server environments, the app routes requests through an Express proxy. 
-However, since Netlify hosts **purely static static assets**, the frontend has a **smart auto-fallback**:
-* If the app detects that the mock/Express server proxy is not reachable, it automatically transitions to **Secure Client-Side Mode**.
-* It establishes a direct browser connection with `api.smartsheet.com`, appending your inputted personal access token as:
-  `Authorization: Bearer <your_token>`
-* This completely avoids CORS issues and operates with zero servers or extra configurations!
+Smartsheet's API strictly disables direct client-side requests from the browser, which causes standard web app deployments to get blocked by browser **CORS policies** (resulting in "Failed to Fetch" errors).
+
+To bypass this seamlessly, we have equipped this application with **Netlify CDN server-side proxying**:
+* The `/public/_redirects` file is pre-configured with rules to map standard `/api/smartsheet/*` requests straight to Smartsheet's `https://api.smartsheet.com/2.0/*` servers on the server-side CDN edge.
+* The frontend automatically sends requests with your standard `Authorization: Bearer <your-token>` token.
+* This is processed and proxied directly, bypassing any CORS rules securely and completely free of charge!
 
 ---
 
-## 🧭 Dynamic Routing Fallback
-We have pre-configured a `/public/_redirects` file with the following directive:
+## 🧭 Dynamic Routing and Proxy Config
+We have pre-configured the `/public/_redirects` file with the following rules:
 ```text
-/* /index.html 200
+/api/smartsheet/me                         https://api.smartsheet.com/2.0/users/me                    200
+/api/smartsheet/workspaces                 https://api.smartsheet.com/2.0/workspaces?includeAll=true  200
+/api/smartsheet/workspaces/:id/shares      https://api.smartsheet.com/2.0/workspaces/:id/shares?includeAll=true  200
+/api/smartsheet/*                          https://api.smartsheet.com/2.0/:splat                      200
+/*                                         /index.html                                                 200
 ```
-This guarantees that if you reload the page on any custom route or share link inside your Netlify domain, Netlify will gracefully fall back to serving your React application without throwing a `404 Not Found` error.
+This guarantees that **both** proxy routes and dynamic single-page fallback paths work beautifully without throwing any `404 Not Found` or `Failed to Fetch` errors on your Netlify domain.

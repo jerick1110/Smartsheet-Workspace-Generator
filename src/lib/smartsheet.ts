@@ -19,6 +19,7 @@ export const fetchSmartsheet = async (
       method,
       headers: {
         "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
         "x-smartsheet-token": token,
       },
       body: options.body ? JSON.stringify(options.body) : undefined,

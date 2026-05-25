@@ -1,1 +1,5 @@
-/* /index.html 200
+/api/smartsheet/me                         https://api.smartsheet.com/2.0/users/me                    200
+/api/smartsheet/workspaces                 https://api.smartsheet.com/2.0/workspaces?includeAll=true  200
+/api/smartsheet/workspaces/:id/shares      https://api.smartsheet.com/2.0/workspaces/:id/shares?includeAll=true  200
+/api/smartsheet/*                          https://api.smartsheet.com/2.0/:splat                      200
+/*                                         /index.html                                                 200
