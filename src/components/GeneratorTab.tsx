@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Copy, Check, ExternalLink, Play, Trash2, ArrowRight, Layers, FileSpreadsheet, PlusCircle, AlertCircle, Sparkles, Terminal } from "lucide-react";
 import { Workspace, WorkspaceCreationLog } from "../types";
+import { fetchSmartsheet } from "../lib/smartsheet";
 
 interface GeneratorTabProps {
   token: string;
@@ -53,21 +54,18 @@ export default function GeneratorTab({ token, isValidated, onRefreshWorkspaces }
     setSingleResult(null);
 
     try {
-      const response = await fetch("/api/smartsheet/workspaces", {
+      const response = await fetchSmartsheet("/workspaces", token, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-smartsheet-token": token,
-        },
-        body: JSON.stringify({ name: singleWorkspaceName.trim() }),
+        body: { name: singleWorkspaceName.trim() }
       });
 
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || "Failed to create workspace.");
+        throw new Error(data.error || data.message || "Failed to create workspace.");
       }
 
-      setSingleResult(data.workspace);
+      const finalWorkspace = data.workspace || data.result || data;
+      setSingleResult(finalWorkspace);
       setSingleWorkspaceName("");
       onRefreshWorkspaces(); // Reload parent catalog
     } catch (err: any) {
@@ -126,24 +124,21 @@ export default function GeneratorTab({ token, isValidated, onRefreshWorkspaces }
       setBatchLogs([...updatedLogs]);
 
       try {
-        const response = await fetch("/api/smartsheet/workspaces", {
+        const response = await fetchSmartsheet("/workspaces", token, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-smartsheet-token": token,
-          },
-          body: JSON.stringify({ name: updatedLogs[i].name }),
+          body: { name: updatedLogs[i].name }
         });
 
         const data = await response.json();
         if (!response.ok) {
-          throw new Error(data.error || "API error response received.");
+          throw new Error(data.error || data.message || "API error response received.");
         }
 
+        const finalWorkspace = data.workspace || data.result || data;
         updatedLogs[i].status = "success";
-        updatedLogs[i].responseId = data.workspace.id;
-        updatedLogs[i].responsePermalink = data.workspace.permalink;
-        updatedLogs[i].accessLevel = data.workspace.accessLevel;
+        updatedLogs[i].responseId = finalWorkspace.id;
+        updatedLogs[i].responsePermalink = finalWorkspace.permalink;
+        updatedLogs[i].accessLevel = finalWorkspace.accessLevel || "OWNER";
       } catch (err: any) {
         updatedLogs[i].status = "error";
         updatedLogs[i].errorMessage = err.message || "Failed to create.";

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Cpu, Key, Database, Code, ShieldCheck, Terminal, HelpCircle, Activity, Globe, RefreshCw } from "lucide-react";
 import { SmartsheetUser, Workspace } from "./types";
+import { fetchSmartsheet } from "./lib/smartsheet";
 import ConsoleTab from "./components/ConsoleTab";
 import GeneratorTab from "./components/GeneratorTab";
 import PythonTab from "./components/PythonTab";
@@ -59,22 +60,14 @@ export default function App() {
 
   const autoValidateToken = async (activeToken: string) => {
     try {
-      const response = await fetch("/api/smartsheet/me", {
-        headers: {
-          "x-smartsheet-token": activeToken,
-        },
-      });
+      const response = await fetchSmartsheet("/me", activeToken);
       if (response.ok) {
         const data = await response.json();
-        setCurrentUser(data.user);
+        setCurrentUser(data.user || data);
         setIsValidated(true);
         
         // Load initial workspaces roster
-        const listResponse = await fetch("/api/smartsheet/workspaces", {
-          headers: {
-            "x-smartsheet-token": activeToken,
-          },
-        });
+        const listResponse = await fetchSmartsheet("/workspaces", activeToken);
         if (listResponse.ok) {
           const listData = await listResponse.json();
           setWorkspaces(listData.workspaces || []);
@@ -89,11 +82,7 @@ export default function App() {
     if (!token) return;
     setIsLoadingWorkspaces(true);
     try {
-      const response = await fetch("/api/smartsheet/workspaces", {
-        headers: {
-          "x-smartsheet-token": token,
-        },
-      });
+      const response = await fetchSmartsheet("/workspaces", token);
       const data = await response.json();
       if (response.ok) {
         setWorkspaces(data.workspaces || []);

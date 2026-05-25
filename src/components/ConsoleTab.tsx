@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Key, CheckCircle, AlertTriangle, RefreshCw, LogIn, ExternalLink, Search, Trash2, Eye, EyeOff, ShieldCheck, Database, Users, FileSpreadsheet, Crown, ChevronDown, ChevronRight, Download, UserCheck } from "lucide-react";
 import { SmartsheetUser, Workspace } from "../types";
+import { fetchSmartsheet } from "../lib/smartsheet";
 
 interface ConsoleTabProps {
   token: string;
@@ -35,61 +36,9 @@ export default function ConsoleTab({
   const [isBulkScanning, setIsBulkScanning] = useState(false);
   const [bulkScanProgress, setBulkScanProgress] = useState(0);
 
-  // Helper utility executing Smartsheet API calls through Dev Server proxy OR direct client-side fallback (for Netlify Static hosting with no server)
-  const fetchSmartsheet = async (path: string, activeToken?: string, options: { method?: string; body?: any } = {}) => {
-    const finalToken = activeToken || token;
-    const method = options.method || "GET";
-    const proxyUrl = path.startsWith("/api") ? path : `/api/smartsheet/${path.replace(/^\//, "")}`;
-
-    try {
-      const controller = new AbortController();
-      const id = setTimeout(() => controller.abort(), 6000); // Fail fast to try direct connection
-
-      const response = await fetch(proxyUrl, {
-        method,
-        headers: {
-          "Content-Type": "application/json",
-          "x-smartsheet-token": finalToken,
-        },
-        body: options.body ? JSON.stringify(options.body) : undefined,
-        signal: controller.signal
-      });
-
-      clearTimeout(id);
-
-      // If Express/Cloud Run proxy returns 404/502/504 (Netlify deployment with no server)
-      if (response.status === 404 || response.status === 502 || response.status === 504) {
-        throw new Error("PROXY_NOT_FOUND");
-      }
-
-      return response;
-    } catch (err: any) {
-      console.warn("Express proxy unavailable, falling back to direct client-side Smartsheet API request: ", err.message || err);
-
-      let directUrl = "";
-      if (path.includes("me")) {
-        directUrl = "https://api.smartsheet.com/2.0/users/me";
-      } else if (path.includes("workspaces") && path.includes("shares")) {
-        const match = path.match(/workspaces\/(\d+)\/shares/);
-        const wsId = match ? match[1] : "";
-        directUrl = `https://api.smartsheet.com/2.0/workspaces/${wsId}/shares?includeAll=true`;
-      } else if (path.includes("workspaces")) {
-        directUrl = "https://api.smartsheet.com/2.0/workspaces?includeAll=true";
-      } else {
-        const cleanPath = path.replace(/^\/api\/smartsheet\/?/, "").replace(/^\//, "");
-        directUrl = `https://api.smartsheet.com/2.0/${cleanPath}`;
-      }
-
-      return fetch(directUrl, {
-        method,
-        headers: {
-          "Authorization": `Bearer ${finalToken}`,
-          "Accept": "application/json",
-          "Content-Type": "application/json"
-        },
-        body: options.body ? JSON.stringify(options.body) : undefined
-      });
-    }
+  // Wrapper around central fetchSmartsheet utility that automatically binds the active or fallback token
+  const callSmartsheet = async (path: string, activeToken?: string, options: { method?: string; body?: any } = {}) => {
+    return fetchSmartsheet(path, activeToken || token, options);
   };
 
   // Load Shares for a single workspace
@@ -101,7 +50,7 @@ export default function ConsoleTab({
     setWorkspaces(prev => prev.map(ws => ws.id === workspaceId ? { ...ws, isLoadingShares: true } : ws));
 
     try {
-      const response = await fetchSmartsheet(`/workspaces/${workspaceId}/shares`, activeToken);
+      const response = await callSmartsheet(`/workspaces/${workspaceId}/shares`, activeToken);
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || "Failed to list workspace shares.");
@@ -217,8 +166,8 @@ export default function ConsoleTab({
     setIsTesting(true);
     setValidationError(null);
     try {
-      // 1. Validate connection via fetchSmartsheet fallback helper
-      const response = await fetchSmartsheet("/me", activeToken);
+      // 1. Validate connection via unified helper
+      const response = await callSmartsheet("/me", activeToken);
       const data = await response.json();
 
       if (!response.ok) {
@@ -243,7 +192,7 @@ export default function ConsoleTab({
   const loadWorkspaces = async (activeToken: string) => {
     setIsLoadingWorkspaces(true);
     try {
-      const response = await fetchSmartsheet("/workspaces", activeToken);
+      const response = await callSmartsheet("/workspaces", activeToken);
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || "Failed to list workspaces.");
