@@ -19,6 +19,7 @@ export const fetchSmartsheet = async (
       method,
       headers: {
         "Content-Type": "application/json",
+        "Accept": "application/json",
         "Authorization": `Bearer ${token}`,
         "x-smartsheet-token": token,
       },

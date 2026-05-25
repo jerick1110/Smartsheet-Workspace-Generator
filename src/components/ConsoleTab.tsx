@@ -53,12 +53,15 @@ export default function ConsoleTab({
       const response = await callSmartsheet(`/workspaces/${workspaceId}/shares`, activeToken);
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || "Failed to list workspace shares.");
+        throw new Error(data.error || data.message || "Failed to list workspace shares.");
       }
+
+      // Supports both data.shares (Express proxy) and data.data/data (direct Smartsheet API on Netlify)
+      const sharesList = data.shares || data.data || (Array.isArray(data) ? data : []);
 
       setWorkspaces(prev => prev.map(ws => 
         ws.id === workspaceId 
-          ? { ...ws, shares: data.shares || [], isLoadingShares: false } 
+          ? { ...ws, shares: sharesList, isLoadingShares: false } 
           : ws
       ));
     } catch (err: any) {
@@ -171,7 +174,7 @@ export default function ConsoleTab({
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || "Failed to validate Smartsheet Token.");
+        throw new Error(data.error || data.message || "Failed to validate Smartsheet Token.");
       }
 
       setCurrentUser(data.user || data);
@@ -195,10 +198,11 @@ export default function ConsoleTab({
       const response = await callSmartsheet("/workspaces", activeToken);
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || "Failed to list workspaces.");
+        throw new Error(data.error || data.message || "Failed to list workspaces.");
       }
       
-      const fetchedWorkspaces = data.workspaces || [];
+      // Support both data.workspaces (Express proxy) and data.data/data (direct Smartsheet API on Netlify)
+      const fetchedWorkspaces = data.workspaces || data.data || (Array.isArray(data) ? data : []);
       setWorkspaces(fetchedWorkspaces);
 
       // Automatically preconfirm expand workspace sub-rows and initiate parallel background fetch of direct member roster

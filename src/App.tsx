@@ -70,7 +70,9 @@ export default function App() {
         const listResponse = await fetchSmartsheet("/workspaces", activeToken);
         if (listResponse.ok) {
           const listData = await listResponse.json();
-          setWorkspaces(listData.workspaces || []);
+          // Support both data.workspaces (Express backend) and data.data/data (raw Smartsheet API on Netlify)
+          const wsList = listData.workspaces || listData.data || (Array.isArray(listData) ? listData : []);
+          setWorkspaces(wsList);
         }
       }
     } catch (err) {
@@ -85,7 +87,8 @@ export default function App() {
       const response = await fetchSmartsheet("/workspaces", token);
       const data = await response.json();
       if (response.ok) {
-        setWorkspaces(data.workspaces || []);
+        const wsList = data.workspaces || data.data || (Array.isArray(data) ? data : []);
+        setWorkspaces(wsList);
       }
     } catch (err) {
       console.error(err);
