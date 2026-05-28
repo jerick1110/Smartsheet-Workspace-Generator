@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Key, CheckCircle, AlertTriangle, RefreshCw, LogIn, ExternalLink, Search, Trash2, Eye, EyeOff, ShieldCheck, Database, Users, FileSpreadsheet, Crown, ChevronDown, ChevronRight, Download, UserCheck } from "lucide-react";
+import { Key, CheckCircle, AlertTriangle, RefreshCw, LogIn, ExternalLink, Search, Trash2, Eye, EyeOff, ShieldCheck, Database, Users, FileSpreadsheet, Crown, ChevronDown, ChevronRight, Download, UserCheck, UserPlus, Edit2, Trash, Save, X, Folder, FileText, Layout, Info } from "lucide-react";
 import { SmartsheetUser, Workspace } from "../types";
 import { fetchSmartsheet } from "../lib/smartsheet";
 
@@ -35,6 +35,22 @@ export default function ConsoleTab({
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Record<number, boolean>>({});
   const [isBulkScanning, setIsBulkScanning] = useState(false);
   const [bulkScanProgress, setBulkScanProgress] = useState(0);
+  const [exportLayout, setExportLayout] = useState<"row_per_member" | "grouped_semicolon" | "grouped_newline">("row_per_member");
+
+  // Advanced sub-tabs and management state for interactive features
+  const [activeSubTabs, setActiveSubTabs] = useState<Record<number, "shares" | "assets">>({});
+  const [addMemberEmail, setAddMemberEmail] = useState<Record<number, string>>({});
+  const [addMemberRole, setAddMemberRole] = useState<Record<number, string>>({});
+  const [isAddingMember, setIsAddingMember] = useState<Record<number, boolean>>({});
+  const [addMemberError, setAddMemberError] = useState<Record<number, string | null>>({});
+
+  // Custom share state trackers for editing inline
+  const [editingShareId, setEditingShareId] = useState<Record<number, string | null>>({});
+  const [editingShareRole, setEditingShareRole] = useState<Record<number, string>>({});
+  const [shareLoadingStates, setShareLoadingStates] = useState<Record<string, "updating" | "deleting" | null>>({});
+
+  // Custom inline deletion confirmation tracker
+  const [confirmingDeleteShareId, setConfirmingDeleteShareId] = useState<Record<number, string | null>>({});
 
   // Wrapper around central fetchSmartsheet utility that automatically binds the active or fallback token
   const callSmartsheet = async (path: string, activeToken?: string, options: { method?: string; body?: any } = {}) => {
@@ -87,6 +103,159 @@ export default function ConsoleTab({
     }
   };
 
+  // Actions error message tracking
+  const [workspaceActionError, setWorkspaceActionError] = useState<Record<number, string | null>>({});
+
+  // Fetch details (Sheets, Folders, Reports, Templates) for a single workspace
+  const loadWorkspaceAssets = async (workspaceId: number, overrideToken?: string) => {
+    const activeToken = overrideToken || token;
+    if (!activeToken) return;
+
+    setWorkspaces(prev => prev.map(ws => ws.id === workspaceId ? { ...ws, isLoadingAssets: true } : ws));
+    setWorkspaceActionError(prev => ({ ...prev, [workspaceId]: null }));
+
+    try {
+      const response = await callSmartsheet(`/workspaces/${workspaceId}`, activeToken);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || data.message || "Failed to load workspace assets.");
+      }
+
+      const workspaceDetails = data.workspace || data;
+      
+      setWorkspaces(prev => prev.map(ws => 
+        ws.id === workspaceId 
+          ? { 
+              ...ws, 
+              assets: {
+                sheets: workspaceDetails.sheets || [],
+                folders: workspaceDetails.folders || [],
+                reports: workspaceDetails.reports || [],
+                templates: workspaceDetails.templates || [],
+              },
+              isLoadingAssets: false 
+            } 
+          : ws
+      ));
+    } catch (err: any) {
+      console.error(`Failed to load assets for workspace ${workspaceId}:`, err);
+      setWorkspaceActionError(prev => ({ ...prev, [workspaceId]: err.message || "Could not load workspace assets." }));
+      setWorkspaces(prev => prev.map(ws => 
+        ws.id === workspaceId 
+          ? { ...ws, isLoadingAssets: false } 
+          : ws
+      ));
+    }
+  };
+
+  const handleAddShare = async (workspaceId: number) => {
+    const email = addMemberEmail[workspaceId]?.trim();
+    const role = addMemberRole[workspaceId] || "EDITOR";
+    
+    if (!email) {
+      setAddMemberError(prev => ({ ...prev, [workspaceId]: "Email address is required." }));
+      return;
+    }
+
+    setAddMemberError(prev => ({ ...prev, [workspaceId]: null }));
+    setIsAddingMember(prev => ({ ...prev, [workspaceId]: true }));
+    setWorkspaceActionError(prev => ({ ...prev, [workspaceId]: null }));
+
+    try {
+      const response = await callSmartsheet(`/workspaces/${workspaceId}/shares`, token, {
+        method: "POST",
+        body: [
+          {
+            email,
+            accessLevel: role
+          }
+        ]
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || data.message || "Failed to add member share.");
+      }
+
+      // Reset form on success
+      setAddMemberEmail(prev => ({ ...prev, [workspaceId]: "" }));
+      setAddMemberRole(prev => ({ ...prev, [workspaceId]: "EDITOR" }));
+      
+      // Reload shares directory to show the newly added member
+      await loadWorkspaceShares(workspaceId);
+    } catch (err: any) {
+      console.error(err);
+      setAddMemberError(prev => ({ ...prev, [workspaceId]: err.message || "Failed to share workspace." }));
+    } finally {
+      setIsAddingMember(prev => ({ ...prev, [workspaceId]: false }));
+    }
+  };
+
+  const handleUpdateShare = async (workspaceId: number, shareId: string, newRole: string) => {
+    setShareLoadingStates(prev => ({ ...prev, [shareId]: "updating" }));
+    setWorkspaceActionError(prev => ({ ...prev, [workspaceId]: null }));
+    try {
+      const response = await callSmartsheet(`/workspaces/${workspaceId}/shares/${shareId}`, token, {
+        method: "PUT",
+        body: {
+          accessLevel: newRole
+        }
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || data.message || "Failed to update member share role.");
+      }
+
+      // Exit editing mode
+      setEditingShareId(prev => ({ ...prev, [workspaceId]: null }));
+      
+      // Reload shares directory
+      await loadWorkspaceShares(workspaceId);
+    } catch (err: any) {
+      console.error(err);
+      setWorkspaceActionError(prev => ({ ...prev, [workspaceId]: err.message || "Error updating share permissions." }));
+    } finally {
+      setShareLoadingStates(prev => ({ ...prev, [shareId]: null }));
+    }
+  };
+
+  const handleDeleteShare = async (workspaceId: number, shareId: string) => {
+    setShareLoadingStates(prev => ({ ...prev, [shareId]: "deleting" }));
+    setWorkspaceActionError(prev => ({ ...prev, [workspaceId]: null }));
+    try {
+      const response = await callSmartsheet(`/workspaces/${workspaceId}/shares/${shareId}`, token, {
+        method: "DELETE"
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || data.message || "Failed to remove member share.");
+      }
+
+      // Clear deletion confirmation state
+      setConfirmingDeleteShareId(prev => ({ ...prev, [workspaceId]: null }));
+
+      // Reload shares directory
+      await loadWorkspaceShares(workspaceId);
+    } catch (err: any) {
+      console.error(err);
+      setWorkspaceActionError(prev => ({ ...prev, [workspaceId]: err.message || "Error revoking permissions." }));
+    } finally {
+      setShareLoadingStates(prev => ({ ...prev, [shareId]: null }));
+    }
+  };
+
+  const handleSwitchSubTab = (workspaceId: number, tab: "shares" | "assets") => {
+    setActiveSubTabs(prev => ({ ...prev, [workspaceId]: tab }));
+    if (tab === "assets") {
+      const ws = workspaces.find(w => w.id === workspaceId);
+      if (ws && !ws.assets) {
+        loadWorkspaceAssets(workspaceId);
+      }
+    }
+  };
+
   // Iteratively scan shares for all workspaces
   const scanAllShares = async () => {
     if (workspaces.length === 0) return;
@@ -108,41 +277,76 @@ export default function ConsoleTab({
 
   const handleExportWorkspaceSpreadsheet = () => {
     let csvContent = "\ufeff"; // UTF-8 byte order mark (BOM) to support excel symbols and characters
-    csvContent += "Workspace Name,Workspace ID,My Access Level,Permalink,Member Name,Member Email,Member Type,Member Role,Is Owner\n";
+    csvContent += "workspaceName,owner,members,permissions\n";
 
     workspaces.forEach((ws) => {
-      const pLink = ws.permalink || "";
-      const wsAccess = ws.accessLevel || "OWNER";
+      let ownerEmail = "";
+      const ownerShare = ws.shares?.find(
+        (s) => s.accessLevel === "OWNER" || s.accessLevel?.toUpperCase() === "OWNER"
+      );
       
-      if (ws.shares && ws.shares.length > 0) {
-        ws.shares.forEach((share) => {
-          const isOwnerStr = (share.accessLevel === "OWNER" || wsAccess === "OWNER" && share.email === currentUser?.email) ? "YES" : "NO";
-          const row = [
-            `"${ws.name.replace(/"/g, '""')}"`,
-            ws.id,
-            wsAccess,
-            `"${pLink.replace(/"/g, '""')}"`,
-            `"${(share.name || "").replace(/"/g, '""')}"`,
-            `"${(share.email || "").replace(/"/g, '""')}"`,
-            share.type || "USER",
-            share.accessLevel,
-            isOwnerStr
-          ];
-          csvContent += row.join(",") + "\n";
-        });
+      if (ownerShare && ownerShare.email) {
+        ownerEmail = ownerShare.email;
+      } else if (ws.accessLevel === "OWNER" || ws.accessLevel?.toUpperCase() === "OWNER") {
+        ownerEmail = currentUser?.email || "";
       } else {
-        // Fallback row representing the workspace itself since shares haven't been loaded yet
-        const row = [
-          `"${ws.name.replace(/"/g, '""')}"`,
-          ws.id,
-          wsAccess,
-          `"${pLink.replace(/"/g, '""')}"`,
-          `"${currentUser?.name || "Workspace Owner (Me)"}"`,
-          `"${currentUser?.email || ""}"`,
-          "USER",
-          wsAccess,
-          "YES"
-        ];
+        ownerEmail = "";
+      }
+
+      // Filter other shares to show in members column (excluding the owner's own record to avoid duplication)
+      const otherShares = (ws.shares || []).filter(
+        (share) =>
+          share.accessLevel !== "OWNER" &&
+          share.accessLevel?.toUpperCase() !== "OWNER" &&
+          (share.email || "").toLowerCase() !== ownerEmail.toLowerCase()
+      );
+
+      const nameVal = `"${ws.name.replace(/"/g, '""')}"`;
+      const ownerVal = `"${ownerEmail.replace(/"/g, '""')}"`;
+
+      if (exportLayout === "row_per_member") {
+        if (otherShares.length > 0) {
+          otherShares.forEach((share) => {
+            const memberEmail = share.email || share.name || "";
+            const memberEmailVal = `"${memberEmail.replace(/"/g, '""')}"`;
+            const permissionVal = `"${(share.accessLevel || "").replace(/"/g, '""')}"`;
+            const row = [nameVal, ownerVal, memberEmailVal, permissionVal];
+            csvContent += row.join(",") + "\n";
+          });
+        } else {
+          const row = [nameVal, ownerVal, '""', '""'];
+          csvContent += row.join(",") + "\n";
+        }
+      } else if (exportLayout === "grouped_semicolon") {
+        let memberEmails: string[] = [];
+        let memberPermissions: string[] = [];
+
+        otherShares.forEach((share) => {
+          const emailOrName = share.email || share.name || "";
+          memberEmails.push(emailOrName);
+          memberPermissions.push(share.accessLevel || "");
+        });
+
+        const memberEmailVal = `"${memberEmails.join("; ").replace(/"/g, '""')}"`;
+        const permissionVal = `"${memberPermissions.join("; ").replace(/"/g, '""')}"`;
+
+        const row = [nameVal, ownerVal, memberEmailVal, permissionVal];
+        csvContent += row.join(",") + "\n";
+      } else {
+        // grouped_newline
+        let memberEmails: string[] = [];
+        let memberPermissions: string[] = [];
+
+        otherShares.forEach((share) => {
+          const emailOrName = share.email || share.name || "";
+          memberEmails.push(emailOrName);
+          memberPermissions.push(share.accessLevel || "");
+        });
+
+        const memberEmailVal = `"${memberEmails.join("\n").replace(/"/g, '""')}"`;
+        const permissionVal = `"${memberPermissions.join("\n").replace(/"/g, '""')}"`;
+
+        const row = [nameVal, ownerVal, memberEmailVal, permissionVal];
         csvContent += row.join(",") + "\n";
       }
     });
@@ -420,6 +624,63 @@ export default function ConsoleTab({
                 <p className="text-xs text-slate-400 mt-2 leading-relaxed">
                   Export your entire Smartsheet workplace roster to a clean, professionally formatted spreadsheet including all verified members, permissions, specific roles, type classifications, and permanent link mappings.
                 </p>
+
+                {/* SPREADSHEET LAYOUT SELECTOR */}
+                <div className="mt-4 bg-slate-950/60 p-4 border border-slate-800/80 rounded-xl space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5 pb-1 border-b border-slate-800/50">
+                    <span className="text-xs font-semibold text-slate-300">Spreadsheet Formatting Target</span>
+                    <span className="text-[10px] uppercase font-mono px-2 py-0.5 bg-emerald-950 text-emerald-400 rounded border border-emerald-900/60 font-bold self-start sm:self-auto">
+                      {exportLayout === "row_per_member" ? "One Row Per Member (Recommended)" : exportLayout === "grouped_semicolon" ? "Compact Semicolon (Inline)" : "Stacked Cells (Multi-line)"}
+                    </span>
+                  </div>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setExportLayout("row_per_member")}
+                      className={`p-3 rounded-lg border text-left transition-all cursor-pointer ${
+                        exportLayout === "row_per_member"
+                          ? "bg-slate-900 border-emerald-500/80 text-white shadow-md shadow-emerald-950/40"
+                          : "bg-slate-900/40 hover:bg-slate-900/80 border-slate-800/80 text-slate-400"
+                      }`}
+                    >
+                      <div className="font-semibold text-[11px] text-slate-200">One Row Per Member</div>
+                      <div className="text-[10px] text-slate-400 mt-1 leading-normal font-mono">
+                        Standard rows. No stretched cells. Perfect for sorting & filters.
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setExportLayout("grouped_semicolon")}
+                      className={`p-3 rounded-lg border text-left transition-all cursor-pointer ${
+                        exportLayout === "grouped_semicolon"
+                          ? "bg-slate-900 border-emerald-500/80 text-white shadow-md shadow-emerald-950/40"
+                          : "bg-slate-900/40 hover:bg-slate-900/80 border-slate-800/80 text-slate-400"
+                      }`}
+                    >
+                      <div className="font-semibold text-[11px] text-slate-200">Compact Semicolon</div>
+                      <div className="text-[10px] text-slate-400 mt-1 leading-normal font-mono">
+                        Compact rows. Combined using ";". Standard cell heights.
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setExportLayout("grouped_newline")}
+                      className={`p-3 rounded-lg border text-left transition-all cursor-pointer ${
+                        exportLayout === "grouped_newline"
+                          ? "bg-slate-900 border-emerald-500/80 text-white shadow-md shadow-emerald-950/40"
+                          : "bg-slate-900/40 hover:bg-slate-900/80 border-slate-800/80 text-slate-400"
+                      }`}
+                    >
+                      <div className="font-semibold text-[11px] text-slate-200">Stacked cells</div>
+                      <div className="text-[10px] text-slate-400 mt-1 leading-normal font-mono">
+                        Single row with newlines in cell. Stretches cell height.
+                      </div>
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
@@ -625,89 +886,503 @@ export default function ConsoleTab({
                           {/* Expanded detail panel row with Slide transitions */}
                           {isExpanded && (
                             <tr className="bg-slate-950/70">
-                              <td colSpan={6} className="py-4 px-4 sm:px-8">
-                                <div className="border border-slate-850/80 rounded-lg p-4 bg-slate-950 space-y-3 shadow-inner">
-                                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-900 pb-2">
-                                    <h5 className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                                      <Users className="w-3.5 h-3.5 text-emerald-400" />
-                                      Verified Shared Members Directory
-                                    </h5>
-                                    
-                                    <button
-                                      onClick={() => loadWorkspaceShares(ws.id)}
-                                      disabled={ws.isLoadingShares}
-                                      className="text-[10px] font-mono text-emerald-400 hover:text-emerald-300 transition flex items-center gap-1 disabled:opacity-55 cursor-pointer"
-                                    >
-                                      <RefreshCw className={`w-3 h-3 ${ws.isLoadingShares ? "animate-spin" : ""}`} />
-                                      Sync Directory
-                                    </button>
+                              <td colSpan={6} className="py-5 px-4 sm:px-8">
+                                <div className="border border-slate-850/80 rounded-xl p-5 bg-slate-950/90 space-y-4 shadow-xl">
+                                  
+                                  {/* Sub Tab Header Navigator */}
+                                  <div className="flex flex-wrap items-center justify-between border-b border-slate-900 pb-3 gap-3">
+                                    <div className="flex items-center gap-1.5 p-1 bg-slate-900/60 border border-slate-850/60 rounded-lg">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSwitchSubTab(ws.id, "shares")}
+                                        className={`px-3 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 transition cursor-pointer ${
+                                          (activeSubTabs[ws.id] || "shares") === "shares"
+                                            ? "bg-slate-950 border border-slate-850 text-emerald-400 font-extrabold shadow-sm"
+                                            : "text-slate-400 hover:text-slate-200"
+                                        }`}
+                                      >
+                                        <Users className="w-3.5 h-3.5" />
+                                        Roles & Permissions
+                                      </button>
+                                      
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSwitchSubTab(ws.id, "assets")}
+                                        className={`px-3 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 transition cursor-pointer ${
+                                          activeSubTabs[ws.id] === "assets"
+                                            ? "bg-slate-950 border border-slate-850 text-emerald-400 font-extrabold shadow-sm"
+                                            : "text-slate-400 hover:text-slate-200"
+                                        }`}
+                                      >
+                                        <FileSpreadsheet className="w-3.5 h-3.5" />
+                                        Sheets & Asset Explorer
+                                      </button>
+                                    </div>
+
+                                    <div className="flex items-center gap-2">
+                                      {(activeSubTabs[ws.id] || "shares") === "shares" ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => loadWorkspaceShares(ws.id)}
+                                          disabled={ws.isLoadingShares}
+                                          className="text-[10px] font-mono text-emerald-400 hover:text-emerald-300 transition flex items-center gap-1.5 disabled:opacity-55 cursor-pointer bg-slate-900 px-2.5 py-1 rounded border border-slate-800"
+                                        >
+                                          <RefreshCw className={`w-3 h-3 ${ws.isLoadingShares ? "animate-spin" : ""}`} />
+                                          Sync Directory
+                                        </button>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => loadWorkspaceAssets(ws.id)}
+                                          disabled={ws.isLoadingAssets}
+                                          className="text-[10px] font-mono text-emerald-400 hover:text-emerald-300 transition flex items-center gap-1.5 disabled:opacity-55 cursor-pointer bg-slate-900 px-2.5 py-1 rounded border border-slate-800"
+                                        >
+                                          <RefreshCw className={`w-3 h-3 ${ws.isLoadingAssets ? "animate-spin" : ""}`} />
+                                          Scan Assets
+                                        </button>
+                                      )}
+                                    </div>
                                   </div>
 
-                                  {ws.isLoadingShares ? (
-                                    <div className="py-6 flex flex-col items-center justify-center gap-2 text-slate-500 text-xs">
-                                      <RefreshCw className="w-4 h-4 animate-spin text-emerald-400" />
-                                      <span className="font-mono">Contacting Smartsheet for shares list...</span>
-                                    </div>
-                                  ) : ws.shares && ws.shares.length > 0 ? (
-                                    <div className="overflow-x-auto">
-                                      <table className="w-full text-left border-collapse">
-                                        <thead>
-                                          <tr className="border-b border-slate-900 text-[9px] uppercase tracking-wider font-bold text-slate-600">
-                                            <th className="py-2">Scope Target Name</th>
-                                            <th className="py-2">Email Address</th>
-                                            <th className="py-2 w-28">Type</th>
-                                            <th className="py-2">Access Level / Permission Role</th>
-                                            <th className="py-2 text-right w-24">Ownership</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-slate-900/40">
-                                          {ws.shares.map((share) => {
-                                            const isOwner = share.accessLevel === "OWNER" || ws.accessLevel === "OWNER" && share.email === currentUser?.email;
-                                            
-                                            return (
-                                              <tr key={share.id} className="text-[11px] hover:bg-slate-900/20 text-slate-300">
-                                                <td className="py-2.5 font-medium text-slate-200">{share.name || "N/A"}</td>
-                                                <td className="py-2.5 font-mono text-slate-400 break-all">{share.email || "Group / Shared Object"}</td>
-                                                <td className="py-2.5 font-mono text-[9px]">
-                                                  <span className="text-slate-500 border border-slate-850 bg-slate-900 px-1 py-0.5 rounded">
-                                                    {share.type || "USER"}
-                                                  </span>
-                                                </td>
-                                                <td className="py-2.5 font-mono">
-                                                  <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-bold border ${
-                                                    share.accessLevel === "OWNER"
-                                                      ? "text-amber-400 bg-amber-950/20 border-amber-900/40"
-                                                      : share.accessLevel === "ADMIN"
-                                                      ? "text-red-400 bg-red-950/20 border-red-900/40"
-                                                      : share.accessLevel.startsWith("EDITOR")
-                                                      ? "text-emerald-400 bg-emerald-950/20 border-emerald-930/40"
-                                                      : "text-sky-400 bg-sky-950/20 border-sky-930/40"
-                                                  }`}>
-                                                    {share.accessLevel === "OWNER" && <Crown className="w-2.5 h-2.5" />}
-                                                    {share.accessLevel}
-                                                  </span>
-                                                </td>
-                                                <td className="py-2.5 text-right">
-                                                  {isOwner ? (
-                                                    <span className="text-amber-400 text-[10px] font-extrabold flex items-center justify-end gap-1 font-mono">
-                                                      <Crown className="w-3 h-3 fill-current" />
-                                                      Owner
-                                                    </span>
-                                                  ) : (
-                                                    <span className="text-slate-500 font-mono">Contributor</span>
-                                                  )}
-                                                </td>
-                                              </tr>
-                                            );
-                                          })}
-                                        </tbody>
-                                      </table>
-                                    </div>
-                                  ) : (
-                                    <div className="py-6 text-center text-slate-600 text-xs border border-dashed border-slate-900/80 rounded-lg">
-                                      No shared members found on this workspace. Members you share folders or sheets with will be rendered here.
+                                  {workspaceActionError[ws.id] && (
+                                    <div className="p-3.5 rounded-lg bg-red-950/20 border border-red-900/40 text-red-300 text-xs flex items-start gap-2 max-w-2xl font-mono leading-relaxed">
+                                      <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                                      <div>
+                                        <span className="font-semibold text-red-200 block">Workspace Operation Notice</span>
+                                        <span>{workspaceActionError[ws.id]}</span>
+                                      </div>
                                     </div>
                                   )}
+
+                                  {/* TAB CONTENT: ROLES & SHARING PERMISSIONS */}
+                                  {(activeSubTabs[ws.id] || "shares") === "shares" && (
+                                    <div className="grid grid-cols-1 xl:grid-cols-4 gap-4.5 pt-1">
+                                      
+                                      {/* Left side: Add Member Invite Form */}
+                                      <div className="xl:col-span-1 bg-slate-900/30 border border-slate-850 p-4 rounded-xl space-y-3 flex flex-col justify-between">
+                                        <div className="space-y-1.5">
+                                          <h6 className="text-[11px] font-bold uppercase text-slate-200 tracking-wider flex items-center gap-1.5">
+                                            <UserPlus className="w-3.5 h-3.5 text-emerald-400" />
+                                            Share Workspace
+                                          </h6>
+                                          <p className="text-[10px] text-slate-400 leading-relaxed">
+                                            Grant permissions to custom team members or external Smartsheet contacts directly.
+                                          </p>
+                                        </div>
+
+                                        <div className="space-y-3 pt-1">
+                                          <div>
+                                            <label className="block text-[9.5px] uppercase font-mono tracking-wider text-slate-500 mb-1">Email Identifier</label>
+                                            <input
+                                              type="email"
+                                              placeholder="e.g. team.member@org.com"
+                                              value={addMemberEmail[ws.id] || ""}
+                                              onChange={(e) => setAddMemberEmail(prev => ({ ...prev, [ws.id]: e.target.value }))}
+                                              className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs font-mono text-slate-200 placeholder:text-slate-700 focus:outline-none focus:border-emerald-500 transition"
+                                            />
+                                          </div>
+
+                                          <div>
+                                            <label className="block text-[9.5px] uppercase font-mono tracking-wider text-slate-500 mb-1">Permission Role</label>
+                                            <select
+                                              value={addMemberRole[ws.id] || "EDITOR"}
+                                              onChange={(e) => setAddMemberRole(prev => ({ ...prev, [ws.id]: e.target.value }))}
+                                              className="w-full px-1.5 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs font-mono text-slate-300 focus:outline-none focus:border-emerald-500"
+                                            >
+                                              <option value="ADMIN">ADMIN</option>
+                                              <option value="EDITOR">EDITOR</option>
+                                              <option value="EDITOR_SHARE">EDITOR_SHARE</option>
+                                              <option value="VIEWER">VIEWER</option>
+                                              <option value="VIEWER_SHARE">VIEWER_SHARE</option>
+                                            </select>
+                                          </div>
+
+                                          {addMemberError[ws.id] && (
+                                            <div className="text-[10px] text-red-400 bg-red-950/20 px-2 py-1 rounded border border-red-900/30">
+                                              {addMemberError[ws.id]}
+                                            </div>
+                                          )}
+
+                                          <button
+                                            type="button"
+                                            onClick={() => handleAddShare(ws.id)}
+                                            disabled={isAddingMember[ws.id] || !(addMemberEmail[ws.id] || "").trim()}
+                                            className={`w-full py-2 text-xs font-bold rounded flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                                              isAddingMember[ws.id] || !(addMemberEmail[ws.id] || "").trim()
+                                                ? "bg-slate-800 text-slate-500 border border-slate-850 cursor-not-allowed"
+                                                : "bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm font-semibold"
+                                            }`}
+                                          >
+                                            {isAddingMember[ws.id] ? (
+                                              <>
+                                                <RefreshCw className="w-3 h-3 animate-spin" />
+                                                <span>Adding...</span>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <UserPlus className="w-3.5 h-3.5" />
+                                                <span>Invite Member</span>
+                                              </>
+                                            )}
+                                          </button>
+                                        </div>
+                                      </div>
+
+                                      {/* Right side: Shares table list */}
+                                      <div className="xl:col-span-3">
+                                        {ws.isLoadingShares ? (
+                                          <div className="py-12 flex flex-col items-center justify-center gap-2 text-slate-500 text-xs border border-slate-900 rounded-xl">
+                                            <RefreshCw className="w-4 h-4 animate-spin text-emerald-400" />
+                                            <span className="font-mono text-slate-400">Loading user roster...</span>
+                                          </div>
+                                        ) : ws.shares && ws.shares.length > 0 ? (
+                                          <div className="overflow-x-auto border border-slate-900 rounded-lg">
+                                            <table className="w-full text-left border-collapse">
+                                              <thead>
+                                                <tr className="border-b border-slate-900 bg-slate-950 text-[9px] uppercase tracking-wider font-bold text-slate-500">
+                                                  <th className="py-2.5 px-3">Scope Target Name</th>
+                                                  <th className="py-2.5 px-3">Email Address</th>
+                                                  <th className="py-2.5 px-3 w-24">Type</th>
+                                                  <th className="py-2.5 px-3">Access Level / Permission Role</th>
+                                                  <th className="py-2.5 px-3 text-right w-36">Actions</th>
+                                                </tr>
+                                              </thead>
+                                              <tbody className="divide-y divide-slate-900/40">
+                                                {ws.shares.map((share) => {
+                                                  const isOwner = share.accessLevel === "OWNER" || ws.accessLevel === "OWNER" && share.email === currentUser?.email;
+                                                  const isEditing = editingShareId[ws.id] === share.id;
+                                                  const isLoading = shareLoadingStates[share.id];
+                                                  const isConfirmingDelete = confirmingDeleteShareId[ws.id] === share.id;
+
+                                                  return (
+                                                    <tr key={share.id} className="text-[11px] hover:bg-slate-900/10 text-slate-300">
+                                                      <td className="py-2 px-3 font-medium text-slate-200">
+                                                        <span className="truncate max-w-xs block font-semibold">{share.name || "N/A"}</span>
+                                                      </td>
+                                                      <td className="py-2 px-3 font-mono text-slate-400">
+                                                        <span className="truncate max-w-xs block">{share.email || "Group / Shared Object"}</span>
+                                                      </td>
+                                                      <td className="py-2 px-3 font-mono text-[9px]">
+                                                        <span className="text-[10px] text-slate-500 font-bold uppercase">
+                                                          {share.type || "USER"}
+                                                        </span>
+                                                      </td>
+                                                      <td className="py-2 px-3 font-mono">
+                                                        {isEditing ? (
+                                                          <div className="flex items-center gap-1.5">
+                                                            <select
+                                                              value={editingShareRole[ws.id]}
+                                                              onChange={(e) => setEditingShareRole(prev => ({ ...prev, [ws.id]: e.target.value }))}
+                                                              className="bg-slate-950 border border-slate-800 px-1.5 py-0.5 rounded text-[11px] text-emerald-400 font-mono focus:outline-none focus:border-emerald-500"
+                                                            >
+                                                              <option value="ADMIN">ADMIN</option>
+                                                              <option value="EDITOR">EDITOR</option>
+                                                              <option value="EDITOR_SHARE">EDITOR_SHARE</option>
+                                                              <option value="VIEWER">VIEWER</option>
+                                                              <option value="VIEWER_SHARE">VIEWER_SHARE</option>
+                                                            </select>
+                                                            
+                                                            <button
+                                                              type="button"
+                                                              onClick={() => handleUpdateShare(ws.id, share.id, editingShareRole[ws.id])}
+                                                              disabled={isLoading === "updating"}
+                                                              className="p-1 bg-emerald-950 text-emerald-400 border border-emerald-900/60 rounded hover:bg-emerald-900 transition disabled:opacity-50 cursor-pointer"
+                                                              title="Save changes"
+                                                            >
+                                                              {isLoading === "updating" ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                                                            </button>
+                                                            <button
+                                                              type="button"
+                                                              onClick={() => setEditingShareId(prev => ({ ...prev, [ws.id]: null }))}
+                                                              className="p-1 bg-slate-900 text-slate-400 border border-slate-800 rounded hover:bg-slate-800 transition cursor-pointer"
+                                                              title="Cancel"
+                                                            >
+                                                              <X className="w-3 h-3" />
+                                                            </button>
+                                                          </div>
+                                                        ) : (
+                                                          <div className="flex items-center gap-2">
+                                                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${
+                                                              share.accessLevel === "OWNER"
+                                                                ? "text-amber-400 bg-amber-950/20 border-amber-900/40"
+                                                                : share.accessLevel === "ADMIN"
+                                                                ? "text-red-400 bg-red-950/20 border-red-900/40"
+                                                                : share.accessLevel.startsWith("EDITOR")
+                                                                ? "text-emerald-400 bg-emerald-950/20 border-emerald-930/40"
+                                                                : "text-sky-400 bg-sky-950/20 border-sky-930/40"
+                                                            }`}>
+                                                              {share.accessLevel === "OWNER" && <Crown className="w-2.5 h-2.5" />}
+                                                              {share.accessLevel}
+                                                            </span>
+
+                                                            {!isOwner && share.accessLevel !== "OWNER" && (
+                                                              <button
+                                                                type="button"
+                                                                onClick={() => {
+                                                                  setEditingShareId(prev => ({ ...prev, [ws.id]: share.id }));
+                                                                  setEditingShareRole(prev => ({ ...prev, [ws.id]: share.accessLevel }));
+                                                                }}
+                                                                className="p-1 hover:bg-slate-900 rounded text-slate-500 hover:text-emerald-400 transition cursor-pointer"
+                                                                title="Refactor share role"
+                                                              >
+                                                                <Edit2 className="w-3 h-3" />
+                                                              </button>
+                                                            )}
+                                                          </div>
+                                                        )}
+                                                      </td>
+                                                      <td className="py-2 px-3 text-right">
+                                                        {isOwner || share.accessLevel === "OWNER" ? (
+                                                          <span className="text-amber-400 text-[10px] font-extrabold flex items-center justify-end gap-1 font-mono">
+                                                            <Crown className="w-3 h-3 fill-current" />
+                                                            Owner
+                                                          </span>
+                                                        ) : isConfirmingDelete ? (
+                                                          <div className="flex items-center justify-end gap-1.5">
+                                                            <button
+                                                              type="button"
+                                                              onClick={() => handleDeleteShare(ws.id, share.id)}
+                                                              disabled={isLoading === "deleting"}
+                                                              className="px-2 py-0.5 bg-red-650 hover:bg-red-550 border border-red-600 rounded font-bold text-[9px] text-white uppercase tracking-wider cursor-pointer"
+                                                            >
+                                                              {isLoading === "deleting" ? "Removing" : "Revoke perms"}
+                                                            </button>
+                                                            <button
+                                                              type="button"
+                                                              onClick={() => setConfirmingDeleteShareId(prev => ({ ...prev, [ws.id]: null }))}
+                                                              className="px-2 py-0.5 bg-slate-900 hover:bg-slate-805 rounded font-bold text-[9px] text-slate-400 cursor-pointer"
+                                                            >
+                                                              Cancel
+                                                            </button>
+                                                          </div>
+                                                        ) : (
+                                                          <button
+                                                            type="button"
+                                                            onClick={() => setConfirmingDeleteShareId(prev => ({ ...prev, [ws.id]: share.id }))}
+                                                            className="p-1 px-1.5 bg-slate-950 hover:bg-red-950/40 border border-slate-900 hover:border-red-900/40 rounded text-slate-500 hover:text-red-400 transition cursor-pointer"
+                                                            title="Delete share access"
+                                                          >
+                                                            <Trash className="w-3 h-3 text-slate-600 hover:text-red-400" />
+                                                          </button>
+                                                        )}
+                                                      </td>
+                                                    </tr>
+                                                  );
+                                                })}
+                                              </tbody>
+                                            </table>
+                                          </div>
+                                        ) : (
+                                          <div className="py-8 text-center text-slate-600 text-xs border border-dashed border-slate-900 rounded-lg">
+                                            No explicit shares found. Click Sync Directory or Invite Member to begin adding.
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* TAB CONTENT: SHEETS & ASSET EXPLORER */}
+                                  {activeSubTabs[ws.id] === "assets" && (
+                                    <div className="space-y-4 pt-1">
+                                      {ws.isLoadingAssets ? (
+                                        <div className="py-12 flex flex-col items-center justify-center gap-2 text-slate-500 text-xs text-center border border-slate-900 border-dashed rounded-xl">
+                                          <RefreshCw className="w-5 h-5 animate-spin text-emerald-400" />
+                                          <span className="font-mono text-slate-400">Inspecting workspace map...</span>
+                                          <span className="text-[10px] text-slate-500 leading-normal">Fetching nested sheets, workflows, and reports from Smartsheet</span>
+                                        </div>
+                                      ) : ws.assets ? (
+                                        (() => {
+                                          const sheets = ws.assets.sheets || [];
+                                          const folders = ws.assets.folders || [];
+                                          const reports = ws.assets.reports || [];
+                                          const templates = ws.assets.templates || [];
+                                          const isEmpty = sheets.length === 0 && folders.length === 0 && reports.length === 0 && templates.length === 0;
+
+                                          if (isEmpty) {
+                                            return (
+                                              <div className="py-12 text-center text-slate-500 text-xs border border-dashed border-slate-850 rounded-xl space-y-1 bg-slate-950/20">
+                                                <Database className="w-6 h-6 mx-auto opacity-10 mb-1" />
+                                                <p className="font-mono text-[11px] text-slate-300">Empty Workspace Space</p>
+                                                <p className="text-[10px] text-slate-500">There are no nested sheets, folders, templates, or reports in this workspace yet.</p>
+                                              </div>
+                                            );
+                                          }
+
+                                          return (
+                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                                              
+                                              {/* COLUMN 1: SHEETS */}
+                                              <div className="p-4 rounded-xl border border-slate-900 bg-slate-950/40 space-y-3 flex flex-col justify-between">
+                                                <div className="space-y-2.5">
+                                                  <div className="flex items-center justify-between border-b border-slate-900 pb-1.5">
+                                                    <span className="text-[10.5px] font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                                                      <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-500" />
+                                                      Web Sheets
+                                                    </span>
+                                                    <span className="font-mono text-[10px] text-slate-500 bg-slate-900 px-1.5 py-0.5 rounded">
+                                                      {sheets.length}
+                                                    </span>
+                                                  </div>
+                                                  
+                                                  {sheets.length === 0 ? (
+                                                    <p className="text-[10px] text-slate-500 italic py-2">No sheets listed.</p>
+                                                  ) : (
+                                                    <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
+                                                      {sheets.map((sheet: any) => (
+                                                        <div key={sheet.id} className="p-2 rounded bg-slate-950/80 border border-slate-900 flex items-start justify-between gap-2 group hover:border-slate-800 transition">
+                                                          <div className="space-y-0.5 min-w-0">
+                                                            <span className="text-[11px] font-semibold text-slate-300 block truncate leading-tight group-hover:text-slate-200" title={sheet.name}>
+                                                              {sheet.name}
+                                                            </span>
+                                                            <span className="font-mono text-[9px] text-slate-500 block">ID: {sheet.id}</span>
+                                                          </div>
+                                                          {sheet.permalink && (
+                                                            <a
+                                                              href={sheet.permalink}
+                                                              target="_blank"
+                                                              rel="noreferrer"
+                                                              className="text-slate-500 hover:text-emerald-400 p-0.5 transition cursor-pointer shrink-0 mt-0.5"
+                                                              title="Open Sheet in Smartsheet"
+                                                            >
+                                                              <ExternalLink className="w-3.5 h-3.5" />
+                                                            </a>
+                                                          )}
+                                                        </div>
+                                                      ))}
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              </div>
+
+                                              {/* COLUMN 2: FOLDERS */}
+                                              <div className="p-4 rounded-xl border border-slate-900 bg-slate-950/40 space-y-3 flex flex-col justify-between">
+                                                <div className="space-y-2.5">
+                                                  <div className="flex items-center justify-between border-b border-slate-900 pb-1.5">
+                                                    <span className="text-[10.5px] font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
+                                                      <Folder className="w-3.5 h-3.5 text-amber-500" />
+                                                      Nested Folders
+                                                    </span>
+                                                    <span className="font-mono text-[10px] text-slate-500 bg-slate-900 px-1.5 py-0.5 rounded">
+                                                      {folders.length}
+                                                    </span>
+                                                  </div>
+                                                  
+                                                  {folders.length === 0 ? (
+                                                    <p className="text-[10px] text-slate-500 italic py-2">No folders listed.</p>
+                                                  ) : (
+                                                    <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
+                                                      {folders.map((folder: any) => (
+                                                        <div key={folder.id} className="p-2 rounded bg-slate-950/80 border border-slate-900 flex items-start justify-between gap-1 group hover:border-slate-800 transition">
+                                                          <div className="space-y-0.5 min-w-0">
+                                                            <span className="text-[11px] font-semibold text-slate-300 block truncate leading-tight group-hover:text-slate-200" title={folder.name}>
+                                                              {folder.name}
+                                                            </span>
+                                                            <span className="font-mono text-[9px] text-slate-500 block">ID: {folder.id}</span>
+                                                          </div>
+                                                          {folder.permalink && (
+                                                            <a
+                                                              href={folder.permalink}
+                                                              target="_blank"
+                                                              rel="noreferrer"
+                                                              className="text-slate-500 hover:text-amber-400 p-0.5 transition cursor-pointer shrink-0 mt-0.5"
+                                                              title="Open Folder in Smartsheet"
+                                                            >
+                                                              <ExternalLink className="w-3.5 h-3.5" />
+                                                            </a>
+                                                          )}
+                                                        </div>
+                                                      ))}
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              </div>
+
+                                              {/* COLUMN 3: REPORTS */}
+                                              <div className="p-4 rounded-xl border border-slate-900 bg-slate-950/40 space-y-3 flex flex-col justify-between">
+                                                <div className="space-y-2.5">
+                                                  <div className="flex items-center justify-between border-b border-slate-900 pb-1.5">
+                                                    <span className="text-[10.5px] font-bold uppercase tracking-wider text-sky-400 flex items-center gap-1.5">
+                                                      <FileText className="w-3.5 h-3.5 text-sky-500" />
+                                                      Reports
+                                                    </span>
+                                                    <span className="font-mono text-[10px] text-slate-500 bg-slate-900 px-1.5 py-0.5 rounded">
+                                                      {reports.length}
+                                                    </span>
+                                                  </div>
+                                                  
+                                                  {reports.length === 0 ? (
+                                                    <p className="text-[10px] text-slate-500 italic py-2">No reports listed.</p>
+                                                  ) : (
+                                                    <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
+                                                      {reports.map((report: any) => (
+                                                        <div key={report.id} className="p-2 rounded bg-slate-950/80 border border-slate-900 flex items-start justify-between gap-1 group hover:border-slate-800 transition">
+                                                          <div className="space-y-0.5 min-w-0">
+                                                            <span className="text-[11px] font-semibold text-slate-300 block truncate leading-tight group-hover:text-slate-200" title={report.name}>
+                                                              {report.name}
+                                                            </span>
+                                                            <span className="font-mono text-[9px] text-slate-500 block">ID: {report.id}</span>
+                                                          </div>
+                                                          {report.permalink && (
+                                                            <a
+                                                              href={report.permalink}
+                                                              target="_blank"
+                                                              rel="noreferrer"
+                                                              className="text-slate-500 hover:text-sky-400 p-0.5 transition cursor-pointer shrink-0 mt-0.5"
+                                                              title="Open Report in Smartsheet"
+                                                            >
+                                                              <ExternalLink className="w-3.5 h-3.5" />
+                                                            </a>
+                                                          )}
+                                                        </div>
+                                                      ))}
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              </div>
+
+                                              {/* COLUMN 4: TEMPLATES */}
+                                              <div className="p-4 rounded-xl border border-slate-900 bg-slate-950/40 space-y-3 flex flex-col justify-between">
+                                                <div className="space-y-2.5">
+                                                  <div className="flex items-center justify-between border-b border-slate-900 pb-1.5">
+                                                    <span className="text-[10.5px] font-bold uppercase tracking-wider text-purple-400 flex items-center gap-1.5">
+                                                      <Layout className="w-3.5 h-3.5 text-purple-500" />
+                                                      Templates
+                                                    </span>
+                                                    <span className="font-mono text-[10px] text-slate-500 bg-slate-900 px-1.5 py-0.5 rounded">
+                                                      {templates.length}
+                                                    </span>
+                                                  </div>
+                                                  
+                                                  {templates.length === 0 ? (
+                                                    <p className="text-[10px] text-slate-500 italic py-2">No templates listed.</p>
+                                                  ) : (
+                                                    <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
+                                                      {templates.map((template: any) => (
+                                                        <div key={template.id} className="p-2 rounded bg-slate-950/80 border border-slate-900 flex items-start justify-between gap-1 group hover:border-slate-800 transition flex-col">
+                                                          <div className="space-y-0.5 min-w-0">
+                                                            <span className="text-[11px] font-semibold text-slate-300 block truncate leading-tight group-hover:text-slate-200" title={template.name}>
+                                                              {template.name}
+                                                            </span>
+                                                            <span className="font-mono text-[9px] text-slate-500 block">ID: {template.id}</span>
+                                                          </div>
+                                                        </div>
+                                                      ))}
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              </div>
+
+                                            </div>
+                                          );
+                                        })()
+                                      ) : (
+                                        <div className="py-8 text-center text-slate-600 text-xs border border-dashed border-slate-900 rounded-lg">
+                                          Click Scan Assets or Sync Directory above to retrieve sheets and files list.
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+
                                 </div>
                               </td>
                             </tr>

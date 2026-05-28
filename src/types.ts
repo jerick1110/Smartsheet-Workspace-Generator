@@ -16,6 +16,13 @@ export interface Workspace {
   accessLevel?: string;
   shares?: WorkspaceShare[]; // Dynamic optional cached list of members
   isLoadingShares?: boolean;
+  assets?: {
+    sheets?: any[];
+    folders?: any[];
+    reports?: any[];
+    templates?: any[];
+  };
+  isLoadingAssets?: boolean;
 }
 
 export interface WorkspaceShare {

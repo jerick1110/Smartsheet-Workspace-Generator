@@ -205,6 +205,186 @@ async function startServer() {
     }
   });
 
+  // 3b. API: Add Shares to a Workspace
+  app.post("/api/smartsheet/workspaces/:workspaceId/shares", async (req, res) => {
+    try {
+      const token = getSmartsheetToken(req);
+      if (!token) {
+        return res.status(401).json({ error: "Smartsheet API Access Token is missing." });
+      }
+
+      const { workspaceId } = req.params;
+      const sharesPayload = req.body; // Expects array [ { "email": "...", "accessLevel": "..." } ] or single object
+
+      const response = await fetch(`https://api.smartsheet.com/2.0/workspaces/${workspaceId}/shares`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify(sharesPayload)
+      });
+
+      const text = await response.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        return res.status(500).json({ error: `Received non-JSON response from Smartsheet: ${text.substring(0, 200)}` });
+      }
+
+      if (!response.ok) {
+        return res.status(response.status).json({
+          error: data.message || "Failed to share workspace.",
+          errorCode: data.errorCode
+        });
+      }
+
+      return res.json({
+        success: true,
+        data: data.result || data
+      });
+    } catch (err: any) {
+      console.error(`Error in POST workspace shares:`, err);
+      return res.status(500).json({ error: err.message || "Internal server error sharing workspace" });
+    }
+  });
+
+  // 3c. API: Update Share Permissions in a Workspace
+  app.put("/api/smartsheet/workspaces/:workspaceId/shares/:shareId", async (req, res) => {
+    try {
+      const token = getSmartsheetToken(req);
+      if (!token) {
+        return res.status(401).json({ error: "Smartsheet API Access Token is missing." });
+      }
+
+      const { workspaceId, shareId } = req.params;
+      const { accessLevel } = req.body;
+
+      const response = await fetch(`https://api.smartsheet.com/2.0/workspaces/${workspaceId}/shares/${shareId}`, {
+        method: "PUT",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify({ accessLevel })
+      });
+
+      const text = await response.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        return res.status(500).json({ error: `Received non-JSON response from Smartsheet: ${text.substring(0, 200)}` });
+      }
+
+      if (!response.ok) {
+        return res.status(response.status).json({
+          error: data.message || "Failed to update workspace share.",
+          errorCode: data.errorCode
+        });
+      }
+
+      return res.json({
+        success: true,
+        data: data.result || data
+      });
+    } catch (err: any) {
+      console.error(`Error in PUT workspace shares:`, err);
+      return res.status(500).json({ error: err.message || "Internal server error updating workspace share" });
+    }
+  });
+
+  // 3d. API: Revoke/Delete Share from a Workspace
+  app.delete("/api/smartsheet/workspaces/:workspaceId/shares/:shareId", async (req, res) => {
+    try {
+      const token = getSmartsheetToken(req);
+      if (!token) {
+        return res.status(401).json({ error: "Smartsheet API Access Token is missing." });
+      }
+
+      const { workspaceId, shareId } = req.params;
+
+      const response = await fetch(`https://api.smartsheet.com/2.0/workspaces/${workspaceId}/shares/${shareId}`, {
+        method: "DELETE",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Accept": "application/json"
+        }
+      });
+
+      const text = await response.text();
+      let data: any = {};
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch (e) {
+          // Some delete responses might be blank or plain text success messages
+        }
+      }
+
+      if (!response.ok) {
+        return res.status(response.status).json({
+          error: data.message || "Failed to delete workspace share.",
+          errorCode: data.errorCode
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: "Access successfully revoked."
+      });
+    } catch (err: any) {
+      console.error(`Error in DELETE workspace share:`, err);
+      return res.status(500).json({ error: err.message || "Internal server error revoking workspace share" });
+    }
+  });
+
+  // 3e. API: Fetch Single Workspace Details (Includes sheets, report assets, templates, folders, etc.)
+  app.get("/api/smartsheet/workspaces/:workspaceId", async (req, res) => {
+    try {
+      const token = getSmartsheetToken(req);
+      if (!token) {
+        return res.status(401).json({ error: "Smartsheet API Access Token is missing." });
+      }
+
+      const { workspaceId } = req.params;
+
+      const response = await fetch(`https://api.smartsheet.com/2.0/workspaces/${workspaceId}`, {
+        method: "GET",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Accept": "application/json"
+        }
+      });
+
+      const text = await response.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        return res.status(500).json({ error: `Received non-JSON response from Smartsheet: ${text.substring(0, 200)}` });
+      }
+
+      if (!response.ok) {
+        return res.status(response.status).json({
+          error: data.message || "Failed to fetch workspace details.",
+          errorCode: data.errorCode
+        });
+      }
+
+      return res.json({
+        success: true,
+        workspace: data
+      });
+    } catch (err: any) {
+      console.error(`Error in GET workspace details:`, err);
+      return res.status(500).json({ error: err.message || "Internal server error fetching workspace details" });
+    }
+  });
+
   // 4. API: Check environment configuration
   app.get("/api/config", (req, res) => {
     res.json({
